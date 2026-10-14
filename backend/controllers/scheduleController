@@ -1,0 +1,435 @@
+const mongoose = require("mongoose");
+
+const Schedule = require("../models/Schedule");
+const Bus = require("../models/Bus");
+const Route = require("../models/Route");
+
+
+// CREATE SCHEDULE
+const createSchedule = async (req, res) => {
+  try {
+    const {
+      busId,
+      routeId,
+      departureTime,
+      arrivalTime,
+      fare,
+    } = req.body;
+
+    // Check required fields
+    if (
+      !busId ||
+      !routeId ||
+      !departureTime ||
+      !arrivalTime ||
+      fare === undefined
+    ) {
+      return res.status(400).json({
+        message: "Please provide all required schedule details",
+      });
+    }
+
+    // Check valid MongoDB IDs
+    if (
+      !mongoose.Types.ObjectId.isValid(busId) ||
+      !mongoose.Types.ObjectId.isValid(routeId)
+    ) {
+      return res.status(400).json({
+        message: "Invalid bus or route ID",
+      });
+    }
+
+    // Find bus
+    const bus = await Bus.findById(busId);
+
+    if (!bus) {
+      return res.status(404).json({
+        message: "Bus not found",
+      });
+    }
+
+    if (bus.status !== "active") {
+      return res.status(400).json({
+        message: "Bus is not active",
+      });
+    }
+
+    // Find route
+    const route = await Route.findById(routeId);
+
+    if (!route) {
+      return res.status(404).json({
+        message: "Route not found",
+      });
+    }
+
+    if (route.status !== "active") {
+      return res.status(400).json({
+        message: "Route is not active",
+      });
+    }
+
+    // Convert times to Date objects
+    const departure = new Date(departureTime);
+    const arrival = new Date(arrivalTime);
+
+    if (
+      Number.isNaN(departure.getTime()) ||
+      Number.isNaN(arrival.getTime())
+    ) {
+      return res.status(400).json({
+        message: "Invalid departure or arrival time",
+      });
+    }
+
+    // Arrival must be after departure
+    if (arrival <= departure) {
+      return res.status(400).json({
+        message: "Arrival time must be after departure time",
+      });
+    }
+
+    // Check if the same bus is already being used
+    // during this time period
+    const conflictingSchedule =
+      await Schedule.findOne({
+        bus: busId,
+
+        status: {
+          $ne: "cancelled",
+        },
+
+        departureTime: {
+          $lt: arrival,
+        },
+
+        arrivalTime: {
+          $gt: departure,
+        },
+      });
+
+    if (conflictingSchedule) {
+      return res.status(400).json({
+        message:
+          "This bus already has another schedule during this time",
+      });
+    }
+
+    // Create schedule
+    const schedule = await Schedule.create({
+      bus: busId,
+      route: routeId,
+      departureTime: departure,
+      arrivalTime: arrival,
+      fare,
+    });
+
+    // Populate bus and route information
+    const populatedSchedule =
+      await Schedule.findById(schedule._id)
+        .populate(
+          "bus",
+          "name registrationNumber model type totalSeats status"
+        )
+        .populate(
+          "route",
+          "origin destination distanceKm estimatedDurationMinutes status"
+        );
+
+    return res.status(201).json({
+      message: "Schedule created successfully",
+      schedule: populatedSchedule,
+    });
+
+  } catch (error) {
+    console.error(
+      "Create schedule error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// GET ALL SCHEDULES
+const getSchedules = async (req, res) => {
+  try {
+    const schedules = await Schedule.find()
+      .populate(
+        "bus",
+        "name registrationNumber model type totalSeats status"
+      )
+      .populate(
+        "route",
+        "origin destination distanceKm estimatedDurationMinutes status"
+      )
+      .sort({
+        departureTime: 1,
+      });
+
+    return res.status(200).json({
+      count: schedules.length,
+      schedules,
+    });
+
+  } catch (error) {
+    console.error(
+      "Get schedules error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// GET ONE SCHEDULE
+const getScheduleById = async (req, res) => {
+  try {
+    if (
+      !mongoose.Types.ObjectId.isValid(
+        req.params.id
+      )
+    ) {
+      return res.status(400).json({
+        message: "Invalid schedule ID",
+      });
+    }
+
+    const schedule =
+      await Schedule.findById(req.params.id)
+        .populate(
+          "bus",
+          "name registrationNumber model type totalSeats status"
+        )
+        .populate(
+          "route",
+          "origin destination distanceKm estimatedDurationMinutes status"
+        );
+
+    if (!schedule) {
+      return res.status(404).json({
+        message: "Schedule not found",
+      });
+    }
+
+    return res.status(200).json({
+      schedule,
+    });
+
+  } catch (error) {
+    console.error(
+      "Get schedule error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// UPDATE SCHEDULE
+const updateSchedule = async (req, res) => {
+  try {
+    if (
+      !mongoose.Types.ObjectId.isValid(
+        req.params.id
+      )
+    ) {
+      return res.status(400).json({
+        message: "Invalid schedule ID",
+      });
+    }
+
+    const schedule =
+      await Schedule.findById(req.params.id);
+
+    if (!schedule) {
+      return res.status(404).json({
+        message: "Schedule not found",
+      });
+    }
+
+    const {
+      busId,
+      routeId,
+      departureTime,
+      arrivalTime,
+      fare,
+      status,
+    } = req.body;
+
+    // Update bus
+    if (busId !== undefined) {
+      if (
+        !mongoose.Types.ObjectId.isValid(busId)
+      ) {
+        return res.status(400).json({
+          message: "Invalid bus ID",
+        });
+      }
+
+      const bus = await Bus.findById(busId);
+
+      if (!bus) {
+        return res.status(404).json({
+          message: "Bus not found",
+        });
+      }
+
+      schedule.bus = busId;
+    }
+
+    // Update route
+    if (routeId !== undefined) {
+      if (
+        !mongoose.Types.ObjectId.isValid(routeId)
+      ) {
+        return res.status(400).json({
+          message: "Invalid route ID",
+        });
+      }
+
+      const route = await Route.findById(
+        routeId
+      );
+
+      if (!route) {
+        return res.status(404).json({
+          message: "Route not found",
+        });
+      }
+
+      schedule.route = routeId;
+    }
+
+    if (departureTime !== undefined) {
+      schedule.departureTime =
+        new Date(departureTime);
+    }
+
+    if (arrivalTime !== undefined) {
+      schedule.arrivalTime =
+        new Date(arrivalTime);
+    }
+
+    if (
+      Number.isNaN(
+        schedule.departureTime.getTime()
+      ) ||
+      Number.isNaN(
+        schedule.arrivalTime.getTime()
+      )
+    ) {
+      return res.status(400).json({
+        message: "Invalid departure or arrival time",
+      });
+    }
+
+    if (
+      schedule.arrivalTime <=
+      schedule.departureTime
+    ) {
+      return res.status(400).json({
+        message:
+          "Arrival time must be after departure time",
+      });
+    }
+
+    if (fare !== undefined) {
+      schedule.fare = fare;
+    }
+
+    if (status !== undefined) {
+      schedule.status = status;
+    }
+
+    const updatedSchedule =
+      await schedule.save();
+
+    const populatedSchedule =
+      await Schedule.findById(
+        updatedSchedule._id
+      )
+        .populate(
+          "bus",
+          "name registrationNumber model type totalSeats status"
+        )
+        .populate(
+          "route",
+          "origin destination distanceKm estimatedDurationMinutes status"
+        );
+
+    return res.status(200).json({
+      message: "Schedule updated successfully",
+      schedule: populatedSchedule,
+    });
+
+  } catch (error) {
+    console.error(
+      "Update schedule error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+// DELETE SCHEDULE
+const deleteSchedule = async (req, res) => {
+  try {
+    if (
+      !mongoose.Types.ObjectId.isValid(
+        req.params.id
+      )
+    ) {
+      return res.status(400).json({
+        message: "Invalid schedule ID",
+      });
+    }
+
+    const schedule =
+      await Schedule.findByIdAndDelete(
+        req.params.id
+      );
+
+    if (!schedule) {
+      return res.status(404).json({
+        message: "Schedule not found",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Schedule deleted successfully",
+    });
+
+  } catch (error) {
+    console.error(
+      "Delete schedule error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+
+module.exports = {
+  createSchedule,
+  getSchedules,
+  getScheduleById,
+  updateSchedule,
+  deleteSchedule,
+};
