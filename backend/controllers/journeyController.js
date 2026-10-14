@@ -1,5 +1,6 @@
 const Route = require("../models/Route");
 const Schedule = require("../models/Schedule");
+const Booking = require("../models/Booking");
 
 
 // Helper to safely use user text in a regular expression
@@ -111,6 +112,55 @@ const searchJourneys = async (req, res) => {
           schedule.bus &&
           schedule.bus.status === "active"
       );
+
+    
+    const scheduleIds =
+      activeSchedules.map(
+        (schedule) =>
+          schedule._id
+      );
+    
+    // Get booked seat counts for each schedule
+    const bookedSeatCounts =
+      await Booking.aggregate([
+        {
+          $match: {
+            schedule: {
+              $in: scheduleIds,
+            },
+
+            status: "confirmed",
+          },
+        },
+
+        {
+          $project: {
+            schedule: 1,
+
+            seatCount: {
+              $size: "$seats",
+            },
+          },
+        },
+
+        {
+          $group: {
+            _id: "$schedule",
+
+            bookedSeats: {
+              $sum: "$seatCount",
+            },
+          },
+        },
+      ]);
+
+    const bookedSeatsMap = {};
+
+    bookedSeatCounts.forEach(
+      (item) => {
+        bookedSeatsMap[item._id.toString()] = item.bookedSeats;
+      }
+    );
 
     // Format response
     const journeys = activeSchedules.map(
